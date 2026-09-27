@@ -6,6 +6,11 @@ import threading
 import time
 from config import *
 
+import cv2
+import numpy as np
+import os
+from math import sqrt, ceil, floor
+
 
 bot = TeleBot(API_TOKEN)
 
@@ -16,6 +21,42 @@ def gen_markup(id):
     markup.add(InlineKeyboardButton("Получить!", callback_data=id))
     return markup
 
+def create_collage(image_paths):
+    images = []
+
+    for path in image_paths:
+        image = cv2.imread(path)
+
+        if image is not None:
+            images.append(image)
+
+    if not images:
+        return None
+
+    num_images = len(images)
+
+    num_cols = floor(sqrt(num_images))
+    num_rows = ceil(num_images / num_cols)
+
+    height, width = images[0].shape[:2]
+
+    collage = np.zeros(
+        (num_rows * height, num_cols * width, 3),
+        dtype=np.uint8
+    )
+
+    for i, image in enumerate(images):
+        image = cv2.resize(image, (width, height))
+
+        row = i // num_cols
+        col = i % num_cols
+
+        collage[
+            row * height:(row + 1) * height,
+            col * width:(col + 1) * width
+        ] = image
+
+    return collage
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
@@ -83,14 +124,57 @@ def handle_start(message):
 Только три первых пользователя получат картинку!""")
 
 
-@bot.message_handler(commands=['rating'])
-def handle_rating(message):
-    res = manager.get_rating() # получить рейтинг
-    res = [f'| @{x[0]:<11} | {x[1]:<11}|\n{"_"*26}' for x in res]
-    res = '\n'.join(res)
-    res = f'|USER_NAME    |COUNT_PRIZE|\n{"_"*26}\n' + res
+@bot.message_handler(commands=['get_my_score'])
+def get_my_score(message):
+    user_id = message.chat.id
 
-    bot.send_message(message.chat.id, res)
+    # Получаем картинки
+    info = manager.get_winners_img(user_id)
+
+    if not info:
+        bot.send_message(
+            user_id,
+            "У тебя пока нет полученных картинок!"
+        )
+        return
+
+    # Получаем названия выигранных картинок
+    prizes = [x[0] for x in info]
+
+    # Получаем все картинки
+    image_paths = os.listdir('img')
+
+    # Выигранные картинки берём из img/,
+    # остальные — из hidden_img/
+    image_paths = [
+        f'img/{x}' if x in prizes else f'hidden_img/{x}'
+        for x in image_paths
+    ]
+
+    # Создаём коллаж
+    collage = create_collage(image_paths)
+
+    if collage is None:
+        bot.send_message(
+            user_id,
+            "Не удалось создать коллаж."
+        )
+        return
+
+    # Сохраняем коллаж
+    collage_path = f'collage_{user_id}.jpg'
+    cv2.imwrite(collage_path, collage)
+
+    # Отправляем коллаж пользователю
+    with open(collage_path, 'rb') as photo:
+        bot.send_photo(
+            user_id,
+            photo,
+            caption="Вот твой текущий результат! 🏆"
+        )
+
+    # Удаляем временный файл
+    os.remove(collage_path)
 
 def polling_thread():
     bot.polling(none_stop=True)
